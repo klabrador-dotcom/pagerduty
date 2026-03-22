@@ -1,0 +1,99 @@
+name: deploy
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REPOSITORY_NAME: ${{ vars.ECR_REPOSITORY_NAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine environment
+        id: env
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            echo "name=prod" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=test" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Node dependencies
+        working-directory: app
+        run: npm install
+
+      - name: Smoke test app
+        working-directory: app
+        run: npm run smoke
+
+      - name: Ensure ECR repository exists
+        shell: bash
+        run: |
+          aws ecr describe-repositories --repository-names "${ECR_REPOSITORY_NAME}" >/dev/null 2>&1 || \
+          aws ecr create-repository --repository-name "${ECR_REPOSITORY_NAME}"
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        id: image
+        shell: bash
+        run: |
+          IMAGE_URI="${{ steps.ecr.outputs.registry }}/${ECR_REPOSITORY_NAME}:${GITHUB_SHA}"
+          docker build -t "${IMAGE_URI}" ./app
+          docker push "${IMAGE_URI}"
+          echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Create backend config
+        working-directory: infra/envs/${{ steps.env.outputs.name }}
+        shell: bash
+        run: |
+          cat > backend.hcl <<EOF2
+          bucket         = "${{ vars.TF_STATE_BUCKET }}"
+          key            = "csgtest/${{ steps.env.outputs.name }}/terraform.tfstate"
+          region         = "${{ vars.AWS_REGION }}"
+          dynamodb_table = "${{ vars.TF_LOCK_TABLE }}"
+          encrypt        = true
+          EOF2
+
+      - name: Terraform init
+        working-directory: infra/envs/${{ steps.env.outputs.name }}
+        run: terraform init -backend-config=backend.hcl
+
+      - name: Terraform fmt check
+        working-directory: infra/envs/${{ steps.env.outputs.name }}
+        run: terraform fmt -check -recursive ../../
+
+      - name: Terraform validate
+        working-directory: infra/envs/${{ steps.env.outputs.name }}
+        run: terraform validate
+
+      - name: Terraform apply
+        working-directory: infra/envs/${{ steps.env.outputs.name }}
+        run: |
+          terraform apply -auto-approve \
+            -var="aws_region=${{ vars.AWS_REGION }}" \
+            -var="image_uri=${{ steps.image.outputs.image_uri }}"
