@@ -1,0 +1,13 @@
+{
+  "name": "pagerduty-csg-hello-world",
+  "version": "1.0.0",
+  "description": "Simple demo app for ECS Fargate",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "smoke": "node server.js & sleep 2 && curl -fsS http://127.0.0.1:3000/health && kill $!"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
