@@ -94,6 +94,6 @@ jobs:
       - name: Terraform apply
         working-directory: infra/envs/${{ steps.env.outputs.name }}
         run: |
-          terraform apply -auto-approve \
+          terraform apply -input=false -auto-approve \
             -var="aws_region=${{ vars.AWS_REGION }}" \
             -var="image_uri=${{ steps.image.outputs.image_uri }}"

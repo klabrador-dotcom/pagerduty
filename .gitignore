@@ -12,6 +12,10 @@
 *.tfvars.json
 terraform.tfvars
 
+# Allow environment tfvars for demo
+!infra/envs/test/terraform.tfvars
+!infra/envs/prod/terraform.tfvars
+
 # Logs
 *.log
 
